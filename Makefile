@@ -44,3 +44,7 @@ worker:
 
 dmm:
 	docker compose exec php php bin/console doctrine:migration:migrate -n
+
+ci:
+	docker compose exec php composer install
+	
