@@ -1,0 +1,207 @@
+# Symfony 7.3 template stack (PHP-FPM 8.4, nginx, PostgreSQL)
+# Development usage:
+#   docker compose up -d
+#   docker compose exec php php bin/console
+#
+# Production image example:
+#   docker build -f docker/php/Dockerfile --target prod -t my-symfony-app .
+# @see https://github.com/mfvanek/useful-sql-scripts/tree/915b5f4a62db14307175af98ddad671d3bbc8484/running_pg_in_docker/5.1.%20Tuning%20parameters%20via%20file
+
+services:
+  php:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+      target: dev
+    container_name: symfony_php
+    restart: unless-stopped
+    volumes:
+      - ./app:/var/www/app:rw,delegated
+      - ./docker/php/conf/php.ini:/usr/local/etc/php/conf.d/zz-app.ini:ro
+      - ./docker/php/conf/xdebug.ini:/usr/local/etc/php/conf.d/zz-xdebug.ini:ro
+      - ./docker/php/conf/php-fpm.conf:/usr/local/etc/php-fpm.conf:ro
+      - ./docker/php/conf/www.conf:/usr/local/etc/php-fpm.d/www.conf:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: symfony_nginx
+    restart: unless-stopped
+    depends_on:
+      - php
+    ports:
+      - "${APP_HTTP_PORT:-8080}:8080"
+    volumes:
+      - ./app/public:/var/www/app/public:ro
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+
+  db:
+    image: postgres:16-alpine
+    container_name: symfony_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - "${APP_DB_PORT:-5432}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data:rw
+       # clean tuned config loaded via command
+      - ./docker/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    command: >
+      postgres -c config_file=/etc/postgresql/postgresql.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.10.1
+    container_name: symfony_postgres_exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_URI: "db:5432/app?sslmode=disable"
+      DATA_SOURCE_USER: "app"
+      DATA_SOURCE_PASS: "app"
+      PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres_exporter/queries.yaml"
+    volumes:
+      - ./docker/postgres/queries.yaml:/etc/postgres_exporter/queries.yaml:ro
+    ports:
+      - "${APP_PG_EXPORTER_PORT:-9187}:9187"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: symfony_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory ${APP_REDIS_MEMORY_LIMIT:-512mb}
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "${APP_REDIS_PORT:-6379}:6379"
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.63.0
+    container_name: symfony_redis_exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: "redis:6379"
+    ports:
+      - "${APP_REDIS_EXPORTER_PORT:-9121}:9121"
+    depends_on:
+      - redis
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: symfony_rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: app
+      RABBITMQ_DEFAULT_PASS: app
+      RABBITMQ_DEFAULT_VHOST: /
+    ports:
+      - "${APP_RABBITMQ_PORT:-5672}:5672"
+      - "${APP_RABBITMQ_MGMT_PORT:-15672}:15672"
+
+  rabbitmq-exporter:
+    image: kbudde/rabbitmq-exporter:1.0.0
+    container_name: symfony_rabbitmq_exporter
+    restart: unless-stopped
+    environment:
+      RABBIT_URL: "http://rabbitmq:15672"
+      RABBIT_USER: "app"
+      RABBIT_PASSWORD: "app"
+    ports:
+      - "${APP_RABBITMQ_EXPORTER_PORT:-9419}:9419"
+    depends_on:
+      - rabbitmq
+
+  php-fpm-exporter:
+    image: hipages/php-fpm_exporter:2.2.0
+    container_name: symfony_php_fpm_exporter
+    restart: unless-stopped
+    command:
+      - "--phpfpm.scrape-uri=tcp://php:9000/fpm-status"
+    ports:
+      - "${APP_PHP_FPM_EXPORTER_PORT:-9253}:9253"
+    depends_on:
+      - php
+
+  prometheus:
+    image: prom/prometheus:v2.53.1
+    container_name: symfony_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${APP_PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - postgres-exporter
+      - redis-exporter
+      - rabbitmq-exporter
+      - php-fpm-exporter
+      - promtail
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: symfony_grafana
+    restart: unless-stopped
+    ports:
+      - "${APP_GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - loki
+
+  loki:
+    image: grafana/loki:2.9.8
+    container_name: symfony_loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/config.yml
+    ports:
+      - "${APP_LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./docker/loki/config.yml:/etc/loki/config.yml:ro
+      - loki-data:/loki
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    container_name: symfony_promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker/promtail/config.yml:/etc/promtail/config.yml:ro
+    depends_on:
+      - loki
+
+  k6:
+    profiles:
+      - k6
+    image: grafana/k6:0.54.0
+    container_name: symfony_k6
+    command: ["run", "/scripts/load.js"]
+    volumes:
+      - ./docker/k6:/scripts:ro
+    depends_on:
+      - nginx
+
+volumes:
+  db-data:
+  loki-data:

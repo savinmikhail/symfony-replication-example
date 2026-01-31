@@ -1,0 +1,78 @@
+pg_stat_database:
+  query: |
+    SELECT
+      datname,
+      numbackends,
+      xact_commit,
+      xact_rollback,
+      blks_read,
+      blks_hit,
+      deadlocks,
+      temp_files,
+      temp_bytes
+    FROM pg_stat_database;
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Name of the database"
+    - numbackends:
+        usage: "GAUGE"
+        description: "Number of active connections"
+    - xact_commit:
+        usage: "COUNTER"
+        description: "Transactions committed"
+    - xact_rollback:
+        usage: "COUNTER"
+        description: "Transactions rolled back"
+    - blks_read:
+        usage: "COUNTER"
+        description: "Blocks read from disk"
+    - blks_hit:
+        usage: "COUNTER"
+        description: "Buffer hits"
+    - deadlocks:
+        usage: "COUNTER"
+        description: "Deadlocks detected"
+    - temp_files:
+        usage: "COUNTER"
+        description: "Temporary files created"
+    - temp_bytes:
+        usage: "COUNTER"
+        description: "Bytes written to temporary files"
+
+pg_database_size:
+  query: |
+    SELECT
+      d.datname,
+      pg_database_size(d.datname) AS bytes
+    FROM pg_database d;
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Name of the database"
+    - bytes:
+        usage: "GAUGE"
+        description: "Database size in bytes"
+
+pg_stat_statements:
+  query: |
+    SELECT
+      d.datname,
+      s.calls,
+      s.total_time,
+      s.mean_time
+    FROM pg_stat_statements s
+    JOIN pg_database d ON d.oid = s.dbid;
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Name of the database"
+    - calls:
+        usage: "COUNTER"
+        description: "Number of times executed"
+    - total_time:
+        usage: "COUNTER"
+        description: "Total execution time of all statements (ms)"
+    - mean_time:
+        usage: "GAUGE"
+        description: "Mean execution time per statement (ms)"

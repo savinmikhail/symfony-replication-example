@@ -1,0 +1,12 @@
+framework:
+    cache:
+        prefix_seed: symfony/template
+
+        app: cache.adapter.redis
+        system: cache.adapter.system
+        default_redis_provider: '%env(resolve:REDIS_URL)%'
+
+when@test:
+    framework:
+        cache:
+            app: cache.adapter.system

@@ -1,0 +1,47 @@
+framework:
+    messenger:
+
+        buses:
+            messenger.bus.default:
+                default_middleware: false
+                middleware:
+                    - reject_redelivered_message_middleware
+                    - validation
+                    - doctrine_ping_connection
+                    - add_bus_name_stamp_middleware: ['messenger.bus.default']
+                    - dispatch_after_current_bus
+                    - send_message
+                    - failed_message_processing_middleware
+                    - handle_message
+                    - doctrine_close_connection
+
+        failure_transport: failed
+
+        transports:
+
+            failed:
+                dsn: 'doctrine://default?queue_name=failed'
+
+            async:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    exchange:
+                        name: async
+                    queues:
+                        app_async: ~
+                retry_strategy:
+                    max_retries: 3
+                    delay: 1000
+                    multiplier: 5
+
+            scheduler_default:
+                dsn: 'doctrine://default'
+
+        routing:
+            App\Message\ProductCreatedMessage: async
+
+when@test:
+    framework:
+        messenger:
+            transports:
+                async: 'test://'
